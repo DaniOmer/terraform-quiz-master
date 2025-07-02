@@ -14,3 +14,39 @@ variable "ip_range" {
   type = string
   default = "10.10.10.0/24"
 }
+
+variable "nat_gateway_name" {
+  description = "The name of the NAT gateway."
+  type = string
+  default = "nat-gateway"
+}
+
+variable "nat_gateway_type" {
+  description = "The type of the NAT gateway."
+  type = string
+  default = "PUBLIC"
+}
+
+variable "nat_gateway_size" {
+  description = "The size of the NAT gateway."
+  type = string
+  default = "1"
+}
+
+variable "udp_timeout_seconds" {
+  description = "The timeout for UDP traffic."
+  type = number
+  default = 30
+}
+
+variable "icmp_timeout_seconds" {
+  description = "The timeout for ICMP traffic."
+  type = number
+  default = 30
+}
+
+variable "tcp_timeout_seconds" {
+  description = "The timeout for TCP traffic."
+  type = number
+  default = 30
+}
