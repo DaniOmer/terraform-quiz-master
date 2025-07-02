@@ -14,6 +14,7 @@ locals {
   do_account_id  = local.account_vars.locals.do_account_id
   do_profile = local.account_vars.locals.do_profile
   do_region  = local.region_vars.locals.do_region
+  project_name = local.common_vars.locals.project_name
   do_token = local.account_vars.locals.do_token
 }
 
@@ -33,7 +34,7 @@ terraform {
 }
 
 provider "digitalocean" {
-  # The token will be provided via the DIGITALOCEAN_TOKEN environment variable
+  token = var.do_token
 }
 EOF
 }
