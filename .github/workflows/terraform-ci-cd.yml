@@ -1,0 +1,302 @@
+name: Terraform CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to deploy"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - test
+          - prod
+      action:
+        description: "Terragrunt action to perform"
+        required: true
+        default: "plan"
+        type: choice
+        options:
+          - plan
+          - apply
+
+env:
+  TF_VERSION: "1.5.7"
+  TFLINT_VERSION: "0.48.0"
+  CHECKOV_VERSION: "2.5.0"
+
+jobs:
+  terraform-validate:
+    name: "Terragrunt Validation"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Setup Terragrunt
+        run: |
+          curl -LO "https://github.com/gruntwork-io/terragrunt/releases/download/v0.48.1/terragrunt_linux_amd64"
+          chmod +x terragrunt_linux_amd64
+          sudo mv terragrunt_linux_amd64 /usr/local/bin/terragrunt
+          terragrunt -v
+
+      - name: Terragrunt Format Check
+        id: hclfmt
+        run: terragrunt hcl format --all
+        continue-on-error: true
+
+      - name: Terraform Format Check
+        id: fmt
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate
+
+      - name: Terragrunt Init (Dev)
+        run: |
+          cd envs/dev
+          terragrunt init
+
+      - name: Comment Format Check Results
+        if: github.event_name == 'pull_request' && steps.fmt.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '❌ **Terraform Format Check Failed**\n\nPlease run `terraform fmt -recursive` to fix formatting issues.'
+            })
+
+  tflint:
+    name: "TFLint Security & Best Practices"
+    runs-on: ubuntu-latest
+    needs: terraform-validate
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache TFLint plugin dir
+        uses: actions/cache@v3
+        with:
+          path: ~/.tflint.d/plugins
+          key: tflint-${{ hashFiles('.tflint.hcl') }}
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: ${{ env.TFLINT_VERSION }}
+
+      - name: Show TFLint version
+        run: tflint --version
+
+      - name: Init TFLint
+        run: tflint --init
+
+      - name: Run TFLint on modules
+        run: |
+          echo "Running TFLint on modules..."
+          for module in modules/*/; do
+            echo "Checking $module"
+            tflint --chdir="$module" --format=compact
+          done
+
+      - name: Run TFLint on environments
+        run: |
+          echo "Running TFLint on environments..."
+          for env in envs/*/; do
+            echo "Checking $env"
+            tflint --chdir="$env" --format=compact
+          done
+
+  checkov:
+    name: "Checkov Security Scan"
+    runs-on: ubuntu-latest
+    needs: terraform-validate
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.x"
+
+      - name: Install Checkov
+        run: |
+          pip install checkov==${{ env.CHECKOV_VERSION }}
+
+      - name: Run Checkov scan
+        run: |
+          checkov -d . \
+            --framework terraform \
+            --output cli \
+            --output sarif \
+            --output-file-path . \
+            --quiet \
+            --compact \
+            --skip-check CKV_DO_3,CKV_DO_4,CKV_TF_1,CKV_TF_2 \
+            --external-checks-dir .
+
+      - name: Upload Checkov results to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: results_checkov.sarif
+          category: checkov
+
+  terraform-plan:
+    name: "Terraform Plan"
+    runs-on: ubuntu-latest
+    needs: [tflint, checkov]
+    strategy:
+      matrix:
+        environment: [dev, test, prod]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terragrunt
+        run: |
+          curl -LO "https://github.com/gruntwork-io/terragrunt/releases/download/v0.48.1/terragrunt_linux_amd64"
+          chmod +x terragrunt_linux_amd64
+          sudo mv terragrunt_linux_amd64 /usr/local/bin/terragrunt
+          terragrunt -v
+
+      - name: Terragrunt Init
+        run: |
+          cd envs/${{ matrix.environment }}
+          terragrunt init --all
+
+      - name: Terragrunt Plan
+        id: plan
+        run: |
+          cd envs/${{ matrix.environment }}
+          terraform plan --all -out=tfplan-${{ matrix.environment }} -no-color
+        continue-on-error: true
+
+      - name: Upload Terragrunt Plan
+        uses: actions/upload-artifact@v3
+        with:
+          name: tfplan-${{ matrix.environment }}
+          path: envs/${{ matrix.environment }}/tfplan-${{ matrix.environment }}
+
+      - name: Comment PR with Plan Results
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const output = `### Terragrunt Plan Results for ${{ matrix.environment }}
+
+            #### Terragrunt Format and Style 🖌\`${{ steps.fmt.outcome }}\`
+            #### Terragrunt Initialization ⚙️\`${{ steps.init.outcome }}\`
+            #### Terragrunt Plan 📖\`${{ steps.plan.outcome }}\`
+
+            <details><summary>Show Plan</summary>
+
+            \`\`\`terragrunt
+            ${{ steps.plan.outputs.stdout }}
+            \`\`\`
+
+            </details>
+
+            *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`, Environment: \`${{ matrix.environment }}\`*`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+
+  terraform-apply:
+    name: "Terraform Apply (Manual Approval Required)"
+    runs-on: ubuntu-latest
+    needs: terraform-plan
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    environment:
+      name: ${{ github.event.inputs.environment }}
+      url: ${{ steps.apply.outputs.url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terragrunt
+        run: |
+          curl -LO "https://github.com/gruntwork-io/terragrunt/releases/download/v0.48.1/terragrunt_linux_amd64"
+          chmod +x terragrunt_linux_amd64
+          sudo mv terragrunt_linux_amd64 /usr/local/bin/terragrunt
+          terragrunt -v
+
+      - name: Download Terraform Plan
+        uses: actions/download-artifact@v3
+        with:
+          name: tfplan-${{ github.event.inputs.environment }}
+          path: envs/${{ github.event.inputs.environment }}/
+
+      - name: Terraform Init
+        run: |
+          cd envs/${{ github.event.inputs.environment }}
+          terragrunt init --all
+
+      - name: Terraform Apply
+        if: github.event.inputs.action == 'apply'
+        id: apply
+        run: |
+          cd envs/${{ github.event.inputs.environment }}
+          terragrunt apply --all tfplan-${{ github.event.inputs.environment }}
+          echo "url=https://cloud.digitalocean.com" >> $GITHUB_OUTPUT
+
+      - name: Comment Apply Results
+        if: github.event.inputs.action == 'apply'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.repos.createCommitComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: context.sha,
+              body: `✅ **Terraform Apply Completed Successfully**
+              
+              Environment: \`${{ github.event.inputs.environment }}\`
+              Triggered by: @${{ github.actor }}
+              Time: ${new Date().toISOString()}`
+            })
+
+  security-summary:
+    name: "Security Summary"
+    runs-on: ubuntu-latest
+    needs: [tflint, checkov]
+    if: always()
+
+    steps:
+      - name: Security Check Summary
+        run: |
+          echo "## 🔒 Security & Quality Summary" >> $GITHUB_STEP_SUMMARY
+          echo "| Tool | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| TFLint | ${{ needs.tflint.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Checkov | ${{ needs.checkov.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📋 Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "- Review security findings in the Security tab" >> $GITHUB_STEP_SUMMARY
+          echo "- Check TFLint recommendations for best practices" >> $GITHUB_STEP_SUMMARY
+          echo "- For production deployment, use manual workflow dispatch" >> $GITHUB_STEP_SUMMARY

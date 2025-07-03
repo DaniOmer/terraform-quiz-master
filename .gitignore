@@ -47,4 +47,32 @@ terragrunt
 
 .DS_Store
 
-Makefile
+# CI/CD Pipeline artifacts
+# TFLint cache and reports
+.tflint.d/
+*.tflint.json
+*.tflint.txt
+
+# Checkov reports
+results_checkov.sarif
+results_checkov.json
+checkov_report.txt
+.checkov.baseline
+
+# Terraform plan files
+tfplan*
+*.tfplan
+plan.out
+
+# Test reports
+junit.xml
+test-results.xml
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+.tmp/

@@ -27,10 +27,10 @@ terraform {
 }
 
 inputs = {
-  name       = "quiz-master-backend-${local.do_environment}"
-  image      = "ubuntu-22-04-x64"
-  size       = "s-1vcpu-1gb"
-  region     = local.do_region
-  vpc_uid    = dependency.vpc.outputs.vpc_id
-  tags       = ["quiz-master", local.do_environment, "backend"]
+  name    = "quiz-master-backend-${local.do_environment}"
+  image   = "ubuntu-22-04-x64"
+  size    = "s-1vcpu-1gb"
+  region  = local.do_region
+  vpc_uid = dependency.vpc.outputs.vpc_id
+  tags    = ["quiz-master", local.do_environment, "backend"]
 }
