@@ -39,6 +39,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Set environment-specific secrets
+        run: |
+          if [ "${{ matrix.environment }}" == "dev" ]; then
+            echo "DO_PAT=${{ secrets.DO_PAT_DEV }}" >> $GITHUB_ENV
+          elif [ "${{ matrix.environment }}" == "test" ]; then
+            echo "DO_PAT=${{ secrets.DO_PAT_TEST }}" >> $GITHUB_ENV
+          elif [ "${{ matrix.environment }}" == "prod" ]; then
+            echo "DO_PAT=${{ secrets.DO_PAT_PROD }}" >> $GITHUB_ENV
+          fi
+
       - name: Checkout
         uses: actions/checkout@v4
 
