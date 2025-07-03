@@ -68,7 +68,7 @@ jobs:
       - name: Terragrunt Init (Dev)
         run: |
           cd envs/dev
-          terragrunt init
+          terragrunt init --all
 
       - name: Comment Format Check Results
         if: github.event_name == 'pull_request' && steps.fmt.outcome == 'failure'
