@@ -45,6 +45,14 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
+      - name: Terraform Format Check
+        id: fmt
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate
+
       - name: Setup Terragrunt
         run: |
           curl -LO "https://github.com/gruntwork-io/terragrunt/releases/download/v0.48.1/terragrunt_linux_amd64"
@@ -56,14 +64,6 @@ jobs:
         id: hclfmt
         run: terragrunt hcl format --all
         continue-on-error: true
-
-      - name: Terraform Format Check
-        id: fmt
-        run: terraform fmt -check -recursive
-
-      - name: Terraform Validate
-        id: validate
-        run: terraform validate
 
       - name: Terragrunt Init (Dev)
         run: |
@@ -239,6 +239,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Download Terraform Plan
+        uses: actions/download-artifact@v3
+        with:
+          name: tfplan-${{ github.event.inputs.environment }}
+          path: envs/${{ github.event.inputs.environment }}/
+
       - name: Setup Terragrunt
         run: |
           curl -LO "https://github.com/gruntwork-io/terragrunt/releases/download/v0.48.1/terragrunt_linux_amd64"
@@ -246,18 +252,12 @@ jobs:
           sudo mv terragrunt_linux_amd64 /usr/local/bin/terragrunt
           terragrunt -v
 
-      - name: Download Terraform Plan
-        uses: actions/download-artifact@v3
-        with:
-          name: tfplan-${{ github.event.inputs.environment }}
-          path: envs/${{ github.event.inputs.environment }}/
-
-      - name: Terraform Init
+      - name: Terragrunt Init
         run: |
           cd envs/${{ github.event.inputs.environment }}
           terragrunt init --all
 
-      - name: Terraform Apply
+      - name: Terragrunt Apply
         if: github.event.inputs.action == 'apply'
         id: apply
         run: |
