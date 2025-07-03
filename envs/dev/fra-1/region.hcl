@@ -1,3 +1,3 @@
 locals {
-  do_region = "fra-1"
+  do_region = "fra1"
 }
