@@ -1,7 +1,7 @@
 resource "digitalocean_firewall" "this" {
   name = var.name
 
-  droplet_ids = var.droplet_ids
+  droplet_ids = [for id in var.droplet_ids : tonumber(id)]
 
   dynamic "inbound_rule" {
     for_each = var.inbound_rules

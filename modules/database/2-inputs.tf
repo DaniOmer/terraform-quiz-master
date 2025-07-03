@@ -32,11 +32,6 @@ variable "private_network_uuid" {
   type        = string
 }
 
-variable "project_id" {
-  description = "The ID of the project that the database cluster is assigned to."
-  type        = string
-}
-
 variable "region" {
   description = "DigitalOcean region where the cluster will reside."
   type        = string
