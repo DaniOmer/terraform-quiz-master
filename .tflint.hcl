@@ -31,12 +31,13 @@ rule "terraform_naming_convention" {
   format  = "snake_case"
 }
 
+# Désactiver ces règles car elles sont gérées par Terragrunt au niveau racine
 rule "terraform_required_version" {
-  enabled = true
+  enabled = false
 }
 
 rule "terraform_required_providers" {
-  enabled = true
+  enabled = false
 }
 
 rule "terraform_standard_module_structure" {
@@ -52,7 +53,7 @@ rule "terraform_unused_declarations" {
 }
 
 rule "terraform_unused_required_providers" {
-  enabled = true
+  enabled = false
 }
 
 rule "terraform_comment_syntax" {
