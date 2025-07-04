@@ -28,7 +28,7 @@ on:
 
 # Add permissions for deployments
 permissions:
-  contents: read
+  contents: write
   actions: read
   deployments: write
 
