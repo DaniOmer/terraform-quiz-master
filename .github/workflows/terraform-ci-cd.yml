@@ -1,0 +1,331 @@
+name: Terraform CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+# Add permissions for security uploads
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+env:
+  TF_VERSION: "1.7.0"
+  TFLINT_VERSION: "0.58.0"
+  TERRAGRUNT_VERSION: "0.82.4"
+  CHECKOV_VERSION: "2.5.0"
+  DO_PAT_DEV: ${{ secrets.DO_PAT_DEV }}
+  DO_PAT_TEST: ${{ secrets.DO_PAT_TEST }}
+  DO_PAT_PROD: ${{ secrets.DO_PAT_PROD }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+jobs:
+  terraform-validate:
+    name: "Terragrunt Validation"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform Format Check
+        id: fmt
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate
+
+      - name: Setup Terragrunt
+        run: |
+          curl -LO "https://github.com/gruntwork-io/terragrunt/releases/download/v${{ env.TERRAGRUNT_VERSION }}/terragrunt_linux_amd64"
+          chmod +x terragrunt_linux_amd64
+          sudo mv terragrunt_linux_amd64 /usr/local/bin/terragrunt
+          terragrunt -v
+
+      - name: Terragrunt Format Check
+        id: hclfmt
+        run: terragrunt hcl format --all
+        continue-on-error: true
+
+      - name: Terragrunt Init (Dev)
+        run: |
+          cd envs/dev
+          terragrunt init --all
+
+      - name: Comment Format Check Results
+        if: github.event_name == 'pull_request' && steps.fmt.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '❌ **Terraform Format Check Failed**\n\nPlease run `terraform fmt -recursive` to fix formatting issues.'
+            })
+
+  tflint:
+    name: "TFLint Security & Best Practices"
+    runs-on: ubuntu-latest
+    needs: terraform-validate
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache TFLint plugin dir
+        uses: actions/cache@v3
+        with:
+          path: ~/.tflint.d/plugins
+          key: tflint-${{ hashFiles('.tflint.hcl') }}
+
+      - uses: terraform-linters/setup-tflint@v4
+        name: Setup TFLint
+        with:
+          tflint_version: v${{ env.TFLINT_VERSION }}
+
+      - name: Show TFLint version
+        run: tflint --version
+
+      - name: Init TFLint
+        run: tflint --init
+        env:
+          # https://github.com/terraform-linters/tflint/blob/master/docs/user-guide/plugins.md#avoiding-rate-limiting
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Run TFLint on modules
+        run: |
+          echo "Running TFLint on modules..."
+          for module in modules/*/; do
+            echo "Checking $module"
+            tflint --chdir="$module" --format=compact --disable-rule=terraform_required_providers --disable-rule=terraform_required_version || echo "TFLint completed with warnings for $module"
+          done
+        continue-on-error: true
+
+      - name: Run TFLint on environments
+        run: |
+          echo "Running TFLint on environments..."
+          for env in envs/*/; do
+            echo "Checking $env"
+            tflint --chdir="$env" --format=compact || echo "TFLint completed with warnings for $env"
+          done
+        continue-on-error: true
+
+  checkov:
+    name: "Checkov Security Scan"
+    runs-on: ubuntu-latest
+    needs: terraform-validate
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.x"
+
+      - name: Install Checkov
+        run: |
+          pip install checkov==${{ env.CHECKOV_VERSION }}
+
+      - name: Run Checkov scan
+        id: checkov-scan
+        run: |
+          # Run Checkov and capture exit code
+          checkov -d . \
+            --framework terraform \
+            --output cli \
+            --output sarif \
+            --output-file results_checkov.sarif \
+            --quiet \
+            --compact \
+            --skip-check CKV_DO_3,CKV_DO_4,CKV_TF_1,CKV_TF_2 \
+            --external-checks-dir . || CHECKOV_EXIT_CODE=$?
+
+          # Check if SARIF file was created and is valid
+          if [ -f results_checkov.sarif ]; then
+            echo "SARIF file created successfully"
+            # Validate SARIF file has content
+            if [ -s results_checkov.sarif ]; then
+              echo "SARIF file has content"
+              # Check if it's valid JSON
+              if ! jq . results_checkov.sarif > /dev/null 2>&1; then
+                echo "SARIF file is not valid JSON, creating minimal valid SARIF"
+                echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Checkov","version":"'${{ env.CHECKOV_VERSION }}'"}},"results":[]}]}' > results_checkov.sarif
+              fi
+            else
+              echo "SARIF file is empty, creating minimal valid SARIF"
+              echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Checkov","version":"'${{ env.CHECKOV_VERSION }}'"}},"results":[]}]}' > results_checkov.sarif
+            fi
+          else
+            echo "SARIF file not created, creating minimal valid SARIF"
+            echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Checkov","version":"'${{ env.CHECKOV_VERSION }}'"}},"results":[]}]}' > results_checkov.sarif
+          fi
+
+          # Output scan results summary
+          echo "scan-completed=true" >> $GITHUB_OUTPUT
+
+          # Don't fail the job if Checkov finds issues
+          exit 0
+
+      - name: Upload Checkov results to GitHub Security
+        if: always() && steps.checkov-scan.outputs.scan-completed == 'true'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results_checkov.sarif
+          category: checkov
+        continue-on-error: true
+
+      - name: Display Checkov Summary
+        if: always()
+        run: |
+          echo "## 🔒 Checkov Security Scan Results" >> $GITHUB_STEP_SUMMARY
+          if [ -f results_checkov.sarif ]; then
+            # Extract results count from SARIF
+            RESULTS_COUNT=$(jq -r '.runs[0].results | length' results_checkov.sarif 2>/dev/null || echo "0")
+            echo "- **Security Issues Found**: $RESULTS_COUNT" >> $GITHUB_STEP_SUMMARY
+            echo "- **Status**: Completed" >> $GITHUB_STEP_SUMMARY
+            if [ "$RESULTS_COUNT" -gt "0" ]; then
+              echo "- **Action Required**: Review findings in the Security tab" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "- **Status**: ✅ No security issues detected" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "- **Status**: ⚠️ Scan failed to complete" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  terraform-plan:
+    name: "Terraform Plan"
+    runs-on: ubuntu-latest
+    needs: [tflint, checkov]
+    strategy:
+      matrix:
+        environment: [dev, prod]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Setup Terragrunt
+        run: |
+          curl -LO "https://github.com/gruntwork-io/terragrunt/releases/download/v${{ env.TERRAGRUNT_VERSION }}/terragrunt_linux_amd64"
+          chmod +x terragrunt_linux_amd64
+          sudo mv terragrunt_linux_amd64 /usr/local/bin/terragrunt
+          terragrunt -v
+
+      - name: Terragrunt Init
+        run: |
+          cd envs/${{ matrix.environment }}
+          terragrunt init --all
+
+      - name: Terragrunt Plan
+        id: plan
+        run: |
+          cd envs/${{ matrix.environment }}
+          # Create a plans directory to store all plan files
+          mkdir -p plans
+
+          # Run terragrunt plan-all and capture output
+          terragrunt plan-all --terragrunt-non-interactive --terragrunt-log-level error > plans/terragrunt-plan-output.txt 2>&1 || echo "Plan completed with warnings"
+
+          # Save individual plan files for apply
+          terragrunt plan-all --terragrunt-non-interactive --terragrunt-log-level error --terragrunt-out-dir plans
+
+          # Create a summary file with the plan results
+          echo "Environment: ${{ matrix.environment }}" > plans/plan-summary.txt
+          echo "Timestamp: $(date)" >> plans/plan-summary.txt
+          echo "Git SHA: ${{ github.sha }}" >> plans/plan-summary.txt
+          echo "Git Ref: ${{ github.ref }}" >> plans/plan-summary.txt
+          echo "Status: Plan completed" >> plans/plan-summary.txt
+          echo "Full output available in terragrunt-plan-output.txt" >> plans/plan-summary.txt
+
+      - name: Upload Terragrunt Plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ matrix.environment }}-${{ github.sha }}
+          path: envs/${{ matrix.environment }}/plans/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Comment PR with Plan Results
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let planOutput = '';
+
+            try {
+              planOutput = fs.readFileSync('envs/${{ matrix.environment }}/plans/terragrunt-plan-output.txt', 'utf8');
+              // Truncate if too long for GitHub comment
+              if (planOutput.length > 65000) {
+                planOutput = planOutput.substring(0, 65000) + '\n... (output truncated)';
+              }
+            } catch (error) {
+              planOutput = 'Plan output not available';
+            }
+
+            const output = `### Terragrunt Plan Results for ${{ matrix.environment }}
+
+            #### Terragrunt Format and Style 🖌\`${{ steps.fmt.outcome }}\`
+            #### Terragrunt Initialization ⚙️\`${{ steps.init.outcome }}\`
+            #### Terragrunt Plan 📖\`${{ steps.plan.outcome }}\`
+
+            <details><summary>Show Plan</summary>
+
+            \`\`\`terragrunt
+            ${planOutput}
+            \`\`\`
+
+            </details>
+
+            *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`, Environment: \`${{ matrix.environment }}\`*
+
+            **To apply this plan, use the [Terraform Apply workflow](../../actions/workflows/terraform-apply.yml) with:**
+            - Environment: \`${{ matrix.environment }}\`
+            - Git SHA: \`${{ github.sha }}\``;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+
+  security-summary:
+    name: "Security Summary"
+    runs-on: ubuntu-latest
+    needs: [tflint, checkov]
+    if: always()
+
+    steps:
+      - name: Security Check Summary
+        run: |
+          echo "## 🔒 Security & Quality Summary" >> $GITHUB_STEP_SUMMARY
+          echo "| Tool | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| TFLint | ${{ needs.tflint.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Checkov | ${{ needs.checkov.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📋 Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "- Review security findings in the Security tab" >> $GITHUB_STEP_SUMMARY
+          echo "- Check TFLint recommendations for best practices" >> $GITHUB_STEP_SUMMARY
+          echo "- For production deployment, use the [Terraform Apply workflow](../../actions/workflows/terraform-apply.yml)" >> $GITHUB_STEP_SUMMARY

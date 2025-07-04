@@ -16,7 +16,7 @@ resource "digitalocean_firewall" "this" {
     for_each = var.outbound_rules
     content {
       protocol              = outbound_rule.value["protocol"]
-      port_range       = outbound_rule.value["protocol"] != "icmp" ? outbound_rule.value["port_range"] : null
+      port_range            = outbound_rule.value["protocol"] != "icmp" ? outbound_rule.value["port_range"] : null
       destination_addresses = split(",", outbound_rule.value["destination_addresses"])
     }
   }

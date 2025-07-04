@@ -20,6 +20,6 @@ terraform {
 }
 
 inputs = {
-  name = "quiz-master-${local.do_environment}"
+  name   = "quiz-master-${local.do_environment}"
   region = local.do_region
 }

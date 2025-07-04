@@ -1,0 +1,125 @@
+framework:
+  - terraform
+  - terraform_plan
+  - kubernetes
+  - dockerfile
+  - secrets
+
+# Répertoires à analyser
+directory:
+  - .
+
+# Répertoires à exclure
+skip-path:
+  - .git
+  - .github
+  - .terraform
+  - node_modules
+  - .venv
+  - __pycache__
+
+# Contrôles à ignorer (avec justification)
+skip-check:
+  # Contrôles DigitalOcean - peut être ajusté selon les besoins
+  - CKV_DO_3 # Droplet backup - peut être activé manuellement selon les besoins
+  - CKV_DO_4 # Droplet monitoring - peut être activé manuellement
+  - CKV_DO_8 # Spaces bucket versioning - peut être activé manuellement pour certains buckets
+  - CKV_DO_9 # Spaces bucket lifecycle - peut être configuré manuellement
+
+  # Contrôles généraux Terraform - ajuster selon le contexte
+  - CKV_TF_1 # Terraform required version - peut être géré au niveau du projet
+  - CKV_TF_2 # Terraform required providers - peut être géré au niveau du projet
+
+# Contrôles à forcer (critiques pour la sécurité)
+check:
+  # Contrôles DigitalOcean spécifiques
+  - CKV_DO_1 # Droplet has monitoring enabled
+  - CKV_DO_2 # Droplet has private networking enabled
+  - CKV_DO_5 # Spaces bucket has versioning enabled
+  - CKV_DO_6 # Spaces bucket has lifecycle rules
+  - CKV_DO_7 # Spaces bucket is encrypted
+  - CKV_DO_10 # Kubernetes cluster auto-upgrade enabled
+  - CKV_DO_11 # Kubernetes cluster surge upgrade enabled
+  - CKV_DO_12 # Kubernetes cluster maintenance policy configured
+
+  # Contrôles généraux de sécurité
+  - CKV_GEN_1 # Passwords should not be hardcoded
+  - CKV_GEN_2 # Private keys should not be hardcoded
+  - CKV_GEN_3 # Suspicious use of curl/wget
+  - CKV_GEN_4 # Suspicious use of netcat
+  - CKV_GEN_5 # Suspicious use of command line tools
+
+  # Contrôles Terraform généraux
+  - CKV2_GEN_1 # Ensure that all data sources are over HTTPS
+  - CKV2_GEN_2 # Ensure that all remote backends are over HTTPS
+  - CKV2_GEN_3 # Ensure that all Terraform modules are using semantic versioning
+  - CKV2_GEN_4 # Ensure that all Terraform modules have descriptions
+  - CKV2_GEN_5 # Ensure that all Terraform variables have descriptions
+  - CKV2_GEN_6 # Ensure that all Terraform outputs have descriptions
+
+  # Contrôles de configuration Terraform
+  - CKV_TF_3 # Terraform workspace usage
+  - CKV_TF_4 # Terraform state file encryption
+  - CKV_TF_5 # Terraform module source pinning
+
+# Configuration des rapports
+output:
+  - cli
+  - json
+  - sarif
+
+# Configuration des rapports JSON et SARIF
+compact: true
+quiet: true
+
+# Configuration des secrets
+secrets:
+  # Patterns pour détecter les secrets
+  disable-entropy-checks: false
+  max-entropy: 4.5
+
+# Configuration des règles personnalisées
+external-checks-dir: []
+
+# Configuration des variables d'environnement
+var-file: []
+
+# Configuration des plugins
+enable-plugins: []
+
+# Configuration des suppressions
+suppress-comment: checkov:skip
+
+# Configuration des seuils
+soft-fail: false
+hard-fail-on:
+  - CRITICAL
+  - HIGH
+
+# Configuration spécifique pour DigitalOcean
+digitalocean:
+  # Régions recommandées pour la performance
+  preferred-regions:
+    - nyc1
+    - nyc3
+    - ams3
+    - sgp1
+    - lon1
+    - fra1
+    - tor1
+    - sfo3
+    - blr1
+    - syd1
+
+  # Tailles de droplets recommandées
+  approved-droplet-sizes:
+    - s-1vcpu-1gb
+    - s-1vcpu-2gb
+    - s-2vcpu-2gb
+    - s-2vcpu-4gb
+    - s-4vcpu-8gb
+    - c-2
+    - c-4
+    - c-8
+    - m-2vcpu-16gb
+    - m-4vcpu-32gb
