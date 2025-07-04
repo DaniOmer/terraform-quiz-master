@@ -231,7 +231,7 @@ jobs:
     needs: [tflint, checkov]
     strategy:
       matrix:
-        environment: [dev, test, prod]
+        environment: [dev, prod]
 
     steps:
       - name: Checkout
