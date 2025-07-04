@@ -6,7 +6,7 @@ variable "name" {
 variable "subscription_tier_slug" {
   description = "The slug of the subscription tier"
   type        = string
-  default     = "starter"
+  default     = "professional"
 }
 
 variable "region" {
