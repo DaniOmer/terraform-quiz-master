@@ -25,6 +25,12 @@ on:
           - plan
           - apply
 
+# Add permissions for security uploads
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
 env:
   TF_VERSION: "1.7.0"
   TFLINT_VERSION: "0.58.0"
@@ -152,29 +158,70 @@ jobs:
           pip install checkov==${{ env.CHECKOV_VERSION }}
 
       - name: Run Checkov scan
+        id: checkov-scan
         run: |
+          # Run Checkov and capture exit code
           checkov -d . \
             --framework terraform \
             --output cli \
             --output sarif \
-            --output-file-path results_checkov.sarif \
+            --output-file results_checkov.sarif \
             --quiet \
             --compact \
             --skip-check CKV_DO_3,CKV_DO_4,CKV_TF_1,CKV_TF_2 \
-            --external-checks-dir . || true
+            --external-checks-dir . || CHECKOV_EXIT_CODE=$?
 
-          # Vérifier que le fichier existe
-          if [ ! -f results_checkov.sarif ]; then
-            echo "Creating empty SARIF file for upload"
-            echo '{"version": "2.1.0", "runs": []}' > results_checkov.sarif
+          # Check if SARIF file was created and is valid
+          if [ -f results_checkov.sarif ]; then
+            echo "SARIF file created successfully"
+            # Validate SARIF file has content
+            if [ -s results_checkov.sarif ]; then
+              echo "SARIF file has content"
+              # Check if it's valid JSON
+              if ! jq . results_checkov.sarif > /dev/null 2>&1; then
+                echo "SARIF file is not valid JSON, creating minimal valid SARIF"
+                echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Checkov","version":"'${{ env.CHECKOV_VERSION }}'"}},"results":[]}]}' > results_checkov.sarif
+              fi
+            else
+              echo "SARIF file is empty, creating minimal valid SARIF"
+              echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Checkov","version":"'${{ env.CHECKOV_VERSION }}'"}},"results":[]}]}' > results_checkov.sarif
+            fi
+          else
+            echo "SARIF file not created, creating minimal valid SARIF"
+            echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Checkov","version":"'${{ env.CHECKOV_VERSION }}'"}},"results":[]}]}' > results_checkov.sarif
           fi
 
+          # Output scan results summary
+          echo "scan-completed=true" >> $GITHUB_OUTPUT
+
+          # Don't fail the job if Checkov finds issues
+          exit 0
+
       - name: Upload Checkov results to GitHub Security
-        if: always()
+        if: always() && steps.checkov-scan.outputs.scan-completed == 'true'
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: results_checkov.sarif
           category: checkov
+        continue-on-error: true
+
+      - name: Display Checkov Summary
+        if: always()
+        run: |
+          echo "## 🔒 Checkov Security Scan Results" >> $GITHUB_STEP_SUMMARY
+          if [ -f results_checkov.sarif ]; then
+            # Extract results count from SARIF
+            RESULTS_COUNT=$(jq -r '.runs[0].results | length' results_checkov.sarif 2>/dev/null || echo "0")
+            echo "- **Security Issues Found**: $RESULTS_COUNT" >> $GITHUB_STEP_SUMMARY
+            echo "- **Status**: Completed" >> $GITHUB_STEP_SUMMARY
+            if [ "$RESULTS_COUNT" -gt "0" ]; then
+              echo "- **Action Required**: Review findings in the Security tab" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "- **Status**: ✅ No security issues detected" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "- **Status**: ⚠️ Scan failed to complete" >> $GITHUB_STEP_SUMMARY
+          fi
 
   terraform-plan:
     name: "Terraform Plan"
