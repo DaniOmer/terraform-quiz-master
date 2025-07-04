@@ -1,11 +1,12 @@
 plugin "terraform" {
   enabled = true
-  preset  = "recommended"
+  # Retirer le preset pour contrôler explicitement les règles
+  # preset  = "recommended"
 }
 
 config {
-  # Désactiver les règles par défaut si nécessaire
-  disabled_by_default = false
+  # Désactiver les règles par défaut pour avoir un contrôle total
+  disabled_by_default = true
   
   # Forcer la validation des modules
   force = false
@@ -14,6 +15,7 @@ config {
   call_module_type = "all"
 }
 
+# Activer seulement les règles utiles pour un projet Terragrunt
 rule "terraform_deprecated_interpolation" {
   enabled = true
 }
@@ -31,7 +33,7 @@ rule "terraform_naming_convention" {
   format  = "snake_case"
 }
 
-# Désactiver ces règles car elles sont gérées par Terragrunt au niveau racine
+# CES RÈGLES SONT DÉSACTIVÉES car gérées par Terragrunt
 rule "terraform_required_version" {
   enabled = false
 }
@@ -52,6 +54,7 @@ rule "terraform_unused_declarations" {
   enabled = true
 }
 
+# Désactivé car Terragrunt gère les providers
 rule "terraform_unused_required_providers" {
   enabled = false
 }
