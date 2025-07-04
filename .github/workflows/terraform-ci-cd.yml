@@ -5,25 +5,6 @@ on:
     branches: [main, dev]
   pull_request:
     branches: [main, dev]
-  workflow_dispatch:
-    inputs:
-      environment:
-        description: "Environment to deploy"
-        required: true
-        default: "dev"
-        type: choice
-        options:
-          - dev
-          - test
-          - prod
-      action:
-        description: "Terragrunt action to perform"
-        required: true
-        default: "plan"
-        type: choice
-        options:
-          - plan
-          - apply
 
 # Add permissions for security uploads
 permissions:
@@ -265,19 +246,24 @@ jobs:
           # Run terragrunt plan-all and capture output
           terragrunt plan-all --terragrunt-non-interactive --terragrunt-log-level error > plans/terragrunt-plan-output.txt 2>&1 || echo "Plan completed with warnings"
 
+          # Save individual plan files for apply
+          terragrunt plan-all --terragrunt-non-interactive --terragrunt-log-level error --terragrunt-out-dir plans
+
           # Create a summary file with the plan results
           echo "Environment: ${{ matrix.environment }}" > plans/plan-summary.txt
           echo "Timestamp: $(date)" >> plans/plan-summary.txt
+          echo "Git SHA: ${{ github.sha }}" >> plans/plan-summary.txt
+          echo "Git Ref: ${{ github.ref }}" >> plans/plan-summary.txt
           echo "Status: Plan completed" >> plans/plan-summary.txt
           echo "Full output available in terragrunt-plan-output.txt" >> plans/plan-summary.txt
-        continue-on-error: true
 
       - name: Upload Terragrunt Plan
         uses: actions/upload-artifact@v4
         with:
-          name: tfplan-${{ matrix.environment }}
+          name: tfplan-${{ matrix.environment }}-${{ github.sha }}
           path: envs/${{ matrix.environment }}/plans/
           if-no-files-found: warn
+          retention-days: 30
 
       - name: Comment PR with Plan Results
         if: github.event_name == 'pull_request'
@@ -311,82 +297,17 @@ jobs:
 
             </details>
 
-            *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`, Environment: \`${{ matrix.environment }}\`*`;
+            *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`, Environment: \`${{ matrix.environment }}\`*
+
+            **To apply this plan, use the [Terraform Apply workflow](../../actions/workflows/terraform-apply.yml) with:**
+            - Environment: \`${{ matrix.environment }}\`
+            - Git SHA: \`${{ github.sha }}\``;
 
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
               body: output
-            })
-
-  terraform-apply:
-    name: "Terraform Apply (Manual Approval Required)"
-    runs-on: ubuntu-latest
-    needs: terraform-plan
-    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
-    environment:
-      name: ${{ github.event.inputs.environment }}
-      url: ${{ steps.apply.outputs.url }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v2
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-          terraform_wrapper: false
-
-      - name: Download Terraform Plan
-        uses: actions/download-artifact@v4
-        with:
-          name: tfplan-${{ github.event.inputs.environment }}
-          path: envs/${{ github.event.inputs.environment }}/plans/
-
-      - name: Setup Terragrunt
-        run: |
-          curl -LO "https://github.com/gruntwork-io/terragrunt/releases/download/v${{ env.TERRAGRUNT_VERSION }}/terragrunt_linux_amd64"
-          chmod +x terragrunt_linux_amd64
-          sudo mv terragrunt_linux_amd64 /usr/local/bin/terragrunt
-          terragrunt -v
-
-      - name: Terragrunt Init
-        run: |
-          cd envs/${{ github.event.inputs.environment }}
-          terragrunt init --all
-
-      - name: Terragrunt Apply
-        if: github.event.inputs.action == 'apply'
-        id: apply
-        run: |
-          cd envs/${{ github.event.inputs.environment }}
-          # Show plan summary before applying
-          if [ -f plans/plan-summary.txt ]; then
-            echo "Plan Summary:"
-            cat plans/plan-summary.txt
-            echo "---"
-          fi
-
-          # Apply all configurations
-          terragrunt apply-all --terragrunt-non-interactive --terragrunt-log-level error
-          echo "url=https://cloud.digitalocean.com" >> $GITHUB_OUTPUT
-
-      - name: Comment Apply Results
-        if: github.event.inputs.action == 'apply'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            github.rest.repos.createCommitComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              commit_sha: context.sha,
-              body: `✅ **Terraform Apply Completed Successfully**
-              
-              Environment: \`${{ github.event.inputs.environment }}\`
-              Triggered by: @${{ github.actor }}
-              Time: ${new Date().toISOString()}`
             })
 
   security-summary:
@@ -407,4 +328,4 @@ jobs:
           echo "### 📋 Next Steps" >> $GITHUB_STEP_SUMMARY
           echo "- Review security findings in the Security tab" >> $GITHUB_STEP_SUMMARY
           echo "- Check TFLint recommendations for best practices" >> $GITHUB_STEP_SUMMARY
-          echo "- For production deployment, use manual workflow dispatch" >> $GITHUB_STEP_SUMMARY
+          echo "- For production deployment, use the [Terraform Apply workflow](../../actions/workflows/terraform-apply.yml)" >> $GITHUB_STEP_SUMMARY

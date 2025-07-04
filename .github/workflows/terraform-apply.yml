@@ -1,0 +1,271 @@
+name: Terraform Apply
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to deploy"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - test
+          - prod
+      git_sha:
+        description: "Git SHA of the plan to apply (from terraform-ci-cd workflow)"
+        required: true
+        type: string
+      action:
+        description: "Action to perform"
+        required: true
+        default: "apply"
+        type: choice
+        options:
+          - apply
+          - show-plan
+          - destroy
+
+# Add permissions for deployments
+permissions:
+  contents: read
+  actions: read
+  deployments: write
+
+env:
+  TF_VERSION: "1.7.0"
+  TERRAGRUNT_VERSION: "0.82.4"
+  DO_PAT_DEV: ${{ secrets.DO_PAT_DEV }}
+  DO_PAT_TEST: ${{ secrets.DO_PAT_TEST }}
+  DO_PAT_PROD: ${{ secrets.DO_PAT_PROD }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+jobs:
+  validate-plan:
+    name: "Validate Plan Exists"
+    runs-on: ubuntu-latest
+    outputs:
+      plan-exists: ${{ steps.check-plan.outputs.plan-exists }}
+      artifact-name: ${{ steps.check-plan.outputs.artifact-name }}
+
+    steps:
+      - name: Check if plan artifact exists
+        id: check-plan
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const artifactName = `tfplan-${{ github.event.inputs.environment }}-${{ github.event.inputs.git_sha }}`;
+
+            try {
+              const artifacts = await github.rest.actions.listWorkflowRunArtifacts({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: context.runId
+              });
+              
+              // Get all artifacts from the repository
+              const allArtifacts = await github.rest.actions.listArtifactsForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: artifactName
+              });
+              
+              const planExists = allArtifacts.data.artifacts.length > 0;
+              
+              core.setOutput('plan-exists', planExists);
+              core.setOutput('artifact-name', artifactName);
+              
+              if (!planExists) {
+                core.setFailed(`Plan artifact '${artifactName}' not found. Please run the terraform-ci-cd workflow first.`);
+              } else {
+                console.log(`Found plan artifact: ${artifactName}`);
+              }
+            } catch (error) {
+              core.setFailed(`Error checking for plan artifact: ${error.message}`);
+            }
+
+  terraform-apply:
+    name: "Terraform Apply"
+    runs-on: ubuntu-latest
+    needs: validate-plan
+    if: needs.validate-plan.outputs.plan-exists == 'true'
+    environment:
+      name: ${{ github.event.inputs.environment }}
+      url: ${{ steps.apply.outputs.url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.git_sha }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Setup Terragrunt
+        run: |
+          curl -LO "https://github.com/gruntwork-io/terragrunt/releases/download/v${{ env.TERRAGRUNT_VERSION }}/terragrunt_linux_amd64"
+          chmod +x terragrunt_linux_amd64
+          sudo mv terragrunt_linux_amd64 /usr/local/bin/terragrunt
+          terragrunt -v
+
+      - name: Download Terraform Plan
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.validate-plan.outputs.artifact-name }}
+          path: envs/${{ github.event.inputs.environment }}/plans/
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Display Plan Summary
+        id: show-summary
+        run: |
+          cd envs/${{ github.event.inputs.environment }}
+
+          echo "## 📋 Plan Summary" >> $GITHUB_STEP_SUMMARY
+          if [ -f plans/plan-summary.txt ]; then
+            echo "### Plan Information" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat plans/plan-summary.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "### Deployment Details" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment**: ${{ github.event.inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Git SHA**: ${{ github.event.inputs.git_sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Action**: ${{ github.event.inputs.action }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Triggered by**: @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Timestamp**: $(date)" >> $GITHUB_STEP_SUMMARY
+
+      - name: Show Plan Only
+        if: github.event.inputs.action == 'show-plan'
+        run: |
+          cd envs/${{ github.event.inputs.environment }}
+
+          echo "## 📖 Terraform Plan Output"
+          if [ -f plans/terragrunt-plan-output.txt ]; then
+            echo "### Plan Output:"
+            cat plans/terragrunt-plan-output.txt
+          else
+            echo "❌ Plan output file not found"
+          fi
+
+          echo "## 📁 Available Plan Files:"
+          find plans -name "*.tfplan" -o -name "*.json" | head -10
+
+      - name: Terragrunt Init
+        if: github.event.inputs.action == 'apply' || github.event.inputs.action == 'destroy'
+        run: |
+          cd envs/${{ github.event.inputs.environment }}
+          terragrunt init --all
+
+      - name: Terragrunt Apply
+        if: github.event.inputs.action == 'apply'
+        id: apply
+        run: |
+          cd envs/${{ github.event.inputs.environment }}
+
+          # Show plan summary before applying
+          if [ -f plans/plan-summary.txt ]; then
+            echo "📋 Plan Summary:"
+            cat plans/plan-summary.txt
+            echo "---"
+          fi
+
+          # Apply using saved plan files
+          echo "🚀 Starting Terragrunt Apply..."
+          terragrunt apply-all --terragrunt-non-interactive --terragrunt-log-level error
+
+          echo "✅ Apply completed successfully!"
+          echo "url=https://cloud.digitalocean.com" >> $GITHUB_OUTPUT
+
+      - name: Terragrunt Destroy
+        if: github.event.inputs.action == 'destroy'
+        id: destroy
+        run: |
+          cd envs/${{ github.event.inputs.environment }}
+
+          echo "🔥 Starting Terragrunt Destroy..."
+          echo "⚠️  This will destroy all resources in the ${{ github.event.inputs.environment }} environment!"
+
+          terragrunt destroy-all --terragrunt-non-interactive --terragrunt-log-level error
+
+          echo "✅ Destroy completed successfully!"
+
+      - name: Comment Apply Results
+        if: github.event.inputs.action == 'apply' && (success() || failure())
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const status = '${{ job.status }}' === 'success' ? '✅ **Terraform Apply Completed Successfully**' : '❌ **Terraform Apply Failed**';
+
+            github.rest.repos.createCommitComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: '${{ github.event.inputs.git_sha }}',
+              body: `${status}
+              
+              **Deployment Details:**
+              - Environment: \`${{ github.event.inputs.environment }}\`
+              - Git SHA: \`${{ github.event.inputs.git_sha }}\`
+              - Triggered by: @${{ github.actor }}
+              - Time: ${new Date().toISOString()}
+              - Workflow: [View Details](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})`
+            })
+
+      - name: Comment Destroy Results
+        if: github.event.inputs.action == 'destroy' && (success() || failure())
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const status = '${{ job.status }}' === 'success' ? '✅ **Terraform Destroy Completed Successfully**' : '❌ **Terraform Destroy Failed**';
+
+            github.rest.repos.createCommitComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: '${{ github.event.inputs.git_sha }}',
+              body: `${status}
+              
+              **Destroy Details:**
+              - Environment: \`${{ github.event.inputs.environment }}\`
+              - Git SHA: \`${{ github.event.inputs.git_sha }}\`
+              - Triggered by: @${{ github.actor }}
+              - Time: ${new Date().toISOString()}
+              - Workflow: [View Details](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})`
+            })
+
+  apply-summary:
+    name: "Apply Summary"
+    runs-on: ubuntu-latest
+    needs: [validate-plan, terraform-apply]
+    if: always()
+
+    steps:
+      - name: Apply Summary
+        run: |
+          echo "## 🚀 Terraform Apply Summary" >> $GITHUB_STEP_SUMMARY
+          echo "| Component | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Plan Validation | ${{ needs.validate-plan.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Terraform Apply | ${{ needs.terraform-apply.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📋 Deployment Details" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment**: ${{ github.event.inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Git SHA**: ${{ github.event.inputs.git_sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Action**: ${{ github.event.inputs.action }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Triggered by**: @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ needs.terraform-apply.result }}" == "success" ]; then
+            echo "### ✅ Next Steps" >> $GITHUB_STEP_SUMMARY
+            echo "- Verify the deployment in the target environment" >> $GITHUB_STEP_SUMMARY
+            echo "- Check application logs and monitoring" >> $GITHUB_STEP_SUMMARY
+            echo "- Update documentation if needed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ❌ Failure Actions" >> $GITHUB_STEP_SUMMARY
+            echo "- Review the job logs for error details" >> $GITHUB_STEP_SUMMARY
+            echo "- Check Terraform state for inconsistencies" >> $GITHUB_STEP_SUMMARY
+            echo "- Consider running a new plan to verify current state" >> $GITHUB_STEP_SUMMARY
+          fi
