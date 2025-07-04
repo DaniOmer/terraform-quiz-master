@@ -259,7 +259,7 @@ jobs:
         id: plan
         run: |
           cd envs/${{ matrix.environment }}
-          terraform plan --all -out=tfplan-${{ matrix.environment }} -no-color
+          terragrunt plan --all -out=tfplan-${{ matrix.environment }} -no-color
         continue-on-error: true
 
       - name: Upload Terragrunt Plan
