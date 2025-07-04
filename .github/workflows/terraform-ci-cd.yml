@@ -106,6 +106,7 @@ jobs:
         uses: terraform-linters/setup-tflint@v4
         with:
           tflint_version: ${{ env.TFLINT_VERSION }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Show TFLint version
         run: tflint --version
@@ -153,7 +154,7 @@ jobs:
             --framework terraform \
             --output cli \
             --output sarif \
-            --output-file-path . \
+            --output-file-path results_checkov.sarif \
             --quiet \
             --compact \
             --skip-check CKV_DO_3,CKV_DO_4,CKV_TF_1,CKV_TF_2 \
