@@ -103,17 +103,19 @@ jobs:
           path: ~/.tflint.d/plugins
           key: tflint-${{ hashFiles('.tflint.hcl') }}
 
-      - name: Setup TFLint
-        uses: terraform-linters/setup-tflint@v4
+      - uses: terraform-linters/setup-tflint@v4
+        name: Setup TFLint
         with:
-          tflint_version: ${{ env.TFLINT_VERSION }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          tflint_version: v0.52.0
 
       - name: Show TFLint version
         run: tflint --version
 
       - name: Init TFLint
         run: tflint --init
+        env:
+          # https://github.com/terraform-linters/tflint/blob/master/docs/user-guide/plugins.md#avoiding-rate-limiting
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Run TFLint on modules
         run: |
