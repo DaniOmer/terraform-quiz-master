@@ -34,7 +34,7 @@ terraform {
 }
 
 inputs = {
-  name                 = "quiz-master-${local.do_environment}"
+  name                 = "quiz-master-database-${local.do_environment}"
   private_network_uuid = dependency.vpc.outputs.vpc_id
   region               = local.do_region
   rules = [

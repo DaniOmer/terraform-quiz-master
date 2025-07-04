@@ -33,4 +33,6 @@ inputs = {
   region  = local.do_region
   vpc_uid = dependency.vpc.outputs.vpc_id
   tags    = ["quiz-master", local.do_environment, "backend"]
+  ssh_key_name = "quiz-master-backend-${local.do_environment}"
+  public_key_path = "~/.ssh/id_rsa.pub"
 }
