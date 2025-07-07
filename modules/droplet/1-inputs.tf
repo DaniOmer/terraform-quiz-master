@@ -37,3 +37,13 @@ variable "tags" {
   type        = list(string)
   default     = []
 }
+
+variable "ssh_key_name" {
+  description = "The name of the SSH key to be used to connect to the Droplet"
+  type        = string
+}
+
+variable "public_key_path" {
+  description = "The path to the public key to be used to connect to the Droplet"
+  type        = string
+}

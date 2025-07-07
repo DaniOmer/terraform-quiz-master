@@ -35,7 +35,7 @@ Read this documentation about using DigitalOcean spaces as [Terraform Remote Sta
 #### 1. Export the Personal Access Token
 
 ```bash
-export DO_PAT=dop_v1_feqfsildndvfiulhusdfbfuinkjcqsleisdvfgbtvr
+export DO_PAT=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
 #### 2. Export AWS Access and Secret Key for
@@ -48,7 +48,7 @@ export AWS_SECRET_ACCESS_KEY=XXXXXXXXXXXXXXXXXXXXXXXXXXX
 #### 3. Provide DO_PAT as variable for terraform commands
 
 ```bash
-terragrunt run-all plan -var "do_token=${DO_PAT}"
+terragrunt plan --all"
 ```
 
 ### How to plan or apply a specific environment (Dev for example)
@@ -57,8 +57,8 @@ Here is an example for the development environment:
 
 ```
 cd envs/dev
-terragrunt run-all plan -var "do_token=${DO_PAT}"
-terragrunt run-all apply -var "do_token=${DO_PAT}"
+terragrunt plan --all"
+terragrunt apply --all"
 ```
 
 ## Documentations
